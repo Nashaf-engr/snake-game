@@ -1,6 +1,6 @@
 # Terminal Snake Game
 
-A lightweight terminal-based Snake game using Python and ANSI escape codes.
+A lightweight terminal-based Snake game with a 3D title screen, colored food and bombs, and full-screen environment.
 
 ## Requirements
 
@@ -21,14 +21,20 @@ python snake.py
 
 ## Features
 
-- Score tracking
-- High score persistence (saved to `snake_highscore.txt`)
+- 3D title screen with "Snake" text in ASCII art
+- Green food and red bombs/toxic hazards
+- Full terminal space environment (no fixed border box)
+- Arrow key and WASD controls
+- Score tracking with high score persistence
 - Speed increases as you score
+- Retry option on game over
 - Cross-platform (Windows, macOS, Linux)
-- Clean terminal graphics
 
 ## Game Rules
 
-- Eat the food (*) to grow and score points
+- Control the snake using WASD or Arrow Keys
+- Eat green food (*) to grow and score points
+- Avoid red bombs (@) - they end the game
 - Avoid hitting walls or yourself
-- Game ends when you lose
+- Press P to pause, Q to quit
+- Press R on game over to retry
