@@ -1,313 +1,398 @@
 #!/usr/bin/env python3
-"""A terminal Snake game with 3D title screen, green food, red bombs,
-and full-space environment. Uses ANSI escape codes."""
+"""Main module for Snake game: game controller, menus, and application entry point."""
 
 import os
 import sys
 import time
 import random
 
-# ANSI escape codes
-CLEAR = '\033[2J'
-HOME = '\033[H'
-HIDE_CURSOR = '\033[?25l'
-SHOW_CURSOR = '\033[?25h'
-RESET = '\033[0m'
-GREEN = '\033[32m'
-RED = '\033[31m'
-BOLD = '\033[1m'
-CYAN = '\033[36m'
-GREEN_BG = '\033[42m'
-RED_BG = '\033[41m'
+import storage
+import entities
+import levels
+import renderer
 
-# Game constants
-WIDTH = 80
-HEIGHT = 24
-INITIAL_SPEED = 0.3
-
-
-def clear_screen():
-    sys.stdout.write(CLEAR)
-    sys.stdout.flush()
-
-
-def hide_cursor():
-    sys.stdout.write(HIDE_CURSOR)
-    sys.stdout.flush()
-
-
-def show_cursor():
-    sys.stdout.write(SHOW_CURSOR)
-    sys.stdout.flush()
+BOARD_WIDTH = 46
+BOARD_HEIGHT = 18
 
 
 def get_key():
-    """Cross-platform non-blocking key press."""
+    """Cross-platform non-blocking key capture for Windows and Unix."""
     try:
         import msvcrt
         if msvcrt.kbhit():
             ch = msvcrt.getch()
             if ch in (b'\x00', b'\xe0'):
                 ch2 = msvcrt.getch()
-                return ch2
+                arrow_map = {
+                    b'H': 'up',
+                    b'P': 'down',
+                    b'K': 'left',
+                    b'M': 'right',
+                }
+                return arrow_map.get(ch2, None)
             return ch
+        return None
     except ImportError:
         pass
-    
-    try:
-        import select
-        fd = sys.stdin.fileno()
-        if select.select([sys.stdin], [], [], 0)[0]:
-            import tty
-            import termios
-            old = termios.tcgetattr(fd)
-            try:
-                tty.setraw(fd)
-                ch = sys.stdin.read(1)
-                if ch == '\x1b':
-                    ch2 = sys.stdin.read(1)
-                    if ch2 == '[':
-                        ch3 = sys.stdin.read(1)
-                        ch = '\x1b[' + ch3
-                return ch
-            finally:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old)
-    except ImportError:
-        pass
-    
+
+    if sys.platform != 'win32':
+        try:
+            import select
+            fd = sys.stdin.fileno()
+            if select.select([sys.stdin], [], [], 0)[0]:
+                import tty
+                import termios
+                old = termios.tcgetattr(fd)
+                try:
+                    tty.setraw(fd)
+                    ch = sys.stdin.read(1)
+                    if ch == '\x1b':
+                        ch2 = sys.stdin.read(1)
+                        if ch2 == '[':
+                            ch3 = sys.stdin.read(1)
+                            arrow_codes = {'A': 'up', 'B': 'down', 'C': 'right', 'D': 'left'}
+                            return arrow_codes.get(ch3, '\x1b[' + ch3)
+                    return ch
+                finally:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except (ImportError, Exception):
+            pass
+
     return None
 
 
-class Snake:
-    def __init__(self):
-        self.reset()
-    
-    def reset(self):
-        self.body = [(WIDTH // 2, HEIGHT // 2)]
-        self.direction = (1, 0)
-        self.grow = False
-    
-    def move(self):
-        head_x, head_y = self.body[0]
-        dx, dy = self.direction
-        new_head = (head_x + dx, head_y + dy)
-        
-        if (new_head[0] < 0 or new_head[0] >= WIDTH or
-            new_head[1] < 0 or new_head[1] >= HEIGHT):
-            return False
-        
-        if new_head in self.body:
-            return False
-        
-        self.body.insert(0, new_head)
-        if not self.grow:
-            self.body.pop()
-        else:
-            self.grow = False
-        return True
-    
-    def grow_snake(self):
-        self.grow = True
-    
-    def set_direction(self, dx, dy):
-        if (dx, dy) == (-self.direction[0], -self.direction[1]):
-            return
-        self.direction = (dx, dy)
+def run_game_session(mode: str, settings: dict):
+    """Run active game loop for either 10-Level Classic Campaign or Endless Random Mode."""
+    leaderboard = storage.load_leaderboard()
+    best_score = leaderboard[0] if leaderboard else 0
+    snake_color = settings.get("color", "Green")
 
+    start_pos = (BOARD_WIDTH // 2, BOARD_HEIGHT // 2)
+    snake = entities.create_snake(start_pos, color=snake_color)
 
-class Food:
-    def __init__(self, snake=None):
-        self.position = None
-        self.bomb_position = None
-        self.spawn(snake)
-    
-    def spawn(self, snake=None):
-        while True:
-            x = random.randint(0, WIDTH - 1)
-            y = random.randint(0, HEIGHT - 1)
-            pos = (x, y)
-            if snake is None or pos not in snake.body:
-                self.position = pos
-                break
-        
-        while True:
-            x = random.randint(0, WIDTH - 1)
-            y = random.randint(0, HEIGHT - 1)
-            pos = (x, y)
-            if snake is None or pos not in snake.body:
-                self.bomb_position = pos
-                break
-
-
-def draw_title():
-    """Draw the 3D title screen using ASCII art."""
-    clear_screen()
-    
-    # Big 3D-style Snake text using ASCII block characters
-    title = [
-        "  +==================================================+",
-        "  ||  ########    ########    ########    ########  ||",
-        "  ||  ##    ##  ##          ##          ##    ##   ||",
-        "  ||  ##    ##  ##          ##          ##    ##   ||",
-        "  ||  ########   ######      ######      ########   ||",
-        "  ||  ##    ##  ##          ##          ##    ##   ||",
-        "  ||  ##    ##  ##          ##          ##    ##   ||",
-        "  ||  ########    ########    ########    ##    ##  ||",
-        "  +==================================================+",
-        "",
-        "                      SNAKE",
-        "",
-        f"{CYAN}        PRESS ANY KEY TO START{RESET}",
-    ]
-    
-    for line in title:
-        sys.stdout.write(line + '\n')
-        sys.stdout.flush()
-    
-    time.sleep(1)
-
-
-def draw_game(snake, food, score, high_score):
-    """Draw the game board with full-space environment."""
-    clear_screen()
-    
-    grid = [[' ' for _ in range(WIDTH)] for _ in range(HEIGHT)]
-    
-    for pos in snake.body:
-        x, y = pos
-        if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-            grid[y][x] = '#'
-    
-    x, y = food.position
-    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-        grid[y][x] = f"{GREEN}*{RESET}"
-    
-    x, y = food.bomb_position
-    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-        grid[y][x] = f"{RED}@*{RESET}"
-    
-    for row in grid:
-        line = ''.join(row)
-        sys.stdout.write(line + '\n')
-    
-    sys.stdout.write(f'\n{RESET}Score: {score}   High Score: {high_score}\n')
-    sys.stdout.write(f'{CYAN}WASD/Arrows to move, Q to quit, P to pause.{RESET}\n')
-    sys.stdout.flush()
-
-
-def draw_game_over(score, high_score):
-    """Draw game over screen with retry option."""
-    clear_screen()
-    
-    sys.stdout.write(f"{BOLD}" + "=" * (WIDTH + 4) + f"{RESET}\n")
-    sys.stdout.write(f"  {RED}GAME OVER!{RESET}\n")
-    sys.stdout.write(f"{BOLD}" + "=" * (WIDTH + 4) + f"{RESET}\n")
-    sys.stdout.write(f"\n  Final Score: {CYAN}{score}{RESET}\n")
-    sys.stdout.write(f"  High Score: {CYAN}{high_score}{RESET}\n")
-    sys.stdout.write(f"\n  {GREEN}R{RESET} - Retry  {RED}Q{RESET} - Quit\n")
-    sys.stdout.flush()
-
-
-def load_high_score():
-    try:
-        with open('snake_highscore.txt', 'r', encoding='utf-8') as f:
-            return int(f.read().strip())
-    except (FileNotFoundError, ValueError):
-        return 0
-
-
-def save_high_score(score):
-    try:
-        with open('snake_highscore.txt', 'w', encoding='utf-8') as f:
-            f.write(str(score))
-    except Exception:
-        pass
-
-
-def main():
-    high_score = load_high_score()
-    snake = Snake()
-    food = Food(snake)
     score = 0
-    speed = INITIAL_SPEED
+    current_level = 1
+    level_food_eaten = 0
+    obstacles = set()
+    req_food = 0
+    level_name = ""
+
+    if mode == "classic":
+        lvl_data = levels.get_level_data(current_level, BOARD_WIDTH, BOARD_HEIGHT)
+        level_name = f"Level {current_level}/10: {lvl_data['name']}"
+        req_food = lvl_data['required_food']
+        obstacles = set(lvl_data['obstacles'])
+    else:
+        level_name = "Endless: Random Mode"
+        req_food = 0
+
+    foods = [entities.spawn_food(snake.body, obstacles, BOARD_WIDTH, BOARD_HEIGHT)]
+    speed = 0.15
     paused = False
-    game_over = False
-    
-    draw_title()
-    
+    ticks = 0
+
     while True:
         key = get_key()
         if key:
             if isinstance(key, bytes):
                 key = key.decode('ascii', errors='ignore').lower()
-            
+
             if key == 'q':
                 break
-            elif key == 'r' and game_over:
-                snake = Snake()
-                food = Food(snake)
-                score = 0
-                speed = INITIAL_SPEED
-                paused = False
-                game_over = False
-                continue
-            elif key == 'p' and not game_over:
+            elif key == 'p':
                 paused = not paused
-            elif not paused and not game_over:
-                if key in ('w', 'up', '\x1b[A'):
-                    snake.set_direction(0, -1)
-                elif key in ('s', 'down', '\x1b[B'):
-                    snake.set_direction(0, 1)
-                elif key in ('a', 'left', '\x1b[D'):
-                    snake.set_direction(-1, 0)
-                elif key in ('d', 'right', '\x1b[C'):
-                    snake.set_direction(1, 0)
-        
-        if paused and not game_over:
-            draw_game(snake, food, score, high_score)
-            sys.stdout.write(f'\n{RESET}Paused... Press P to resume.{RESET}\n')
-            sys.stdout.flush()
+            elif not paused:
+                if key in ('w', 'up'):
+                    entities.change_snake_direction(snake, (0, -1))
+                elif key in ('s', 'down'):
+                    entities.change_snake_direction(snake, (0, 1))
+                elif key in ('a', 'left'):
+                    entities.change_snake_direction(snake, (-1, 0))
+                elif key in ('d', 'right'):
+                    entities.change_snake_direction(snake, (1, 0))
+
+        if paused:
+            hud_data = {
+                "score": score,
+                "best": max(best_score, score),
+                "mode_name": level_name,
+                "food_count": level_food_eaten,
+                "req_food": req_food
+            }
+            renderer.draw_game_board(snake, foods, obstacles, hud_data, BOARD_WIDTH, BOARD_HEIGHT, paused=True)
             time.sleep(0.1)
             continue
-        
-        if game_over:
-            draw_game_over(score, high_score)
-            sys.stdout.flush()
-            time.sleep(0.1)
-            continue
-        
-        if not snake.move():
-            if score > high_score:
-                high_score = score
-                save_high_score(high_score)
-            game_over = True
-            continue
-        
-        if snake.body[0] == food.position:
-            snake.grow_snake()
-            score += 1
-            food.spawn(snake)
-            speed = max(0.05, INITIAL_SPEED - score * 0.003)
-        
-        if snake.body[0] == food.bomb_position:
-            if score > high_score:
-                high_score = score
-                save_high_score(high_score)
-            game_over = True
-            continue
-        
-        draw_game(snake, food, score, high_score)
-        sys.stdout.flush()
+
+        ticks += 1
+
+        # Advance snake
+        new_head = entities.move_snake(snake)
+
+        # Check collision with boundary walls or obstacles
+        if levels.check_collision(new_head, obstacles, BOARD_WIDTH, BOARD_HEIGHT):
+            break
+
+        # Check self collision (head with any body segment after index 0)
+        if new_head in snake.body[1:]:
+            break
+
+        # Check item pickups
+        eaten_item = None
+        for item in foods:
+            if new_head == item.pos:
+                eaten_item = item
+                break
+
+        if eaten_item:
+            score += eaten_item.points
+            snake.grow_pending += eaten_item.bonus_len
+            foods.remove(eaten_item)
+
+            if eaten_item.kind == 'food':
+                level_food_eaten += 1
+                # Spawn next regular food
+                foods.append(entities.spawn_food(snake.body, obstacles, BOARD_WIDTH, BOARD_HEIGHT))
+
+                # Periodic special/bonus food spawn
+                if random.random() < 0.35 and len(foods) < 3:
+                    occ = {f.pos for f in foods}
+                    sp = entities.spawn_special_food(snake.body, obstacles, occ, BOARD_WIDTH, BOARD_HEIGHT)
+                    if sp:
+                        foods.append(sp)
+
+                # Classic Mode progression
+                if mode == "classic" and level_food_eaten >= req_food:
+                    if current_level < levels.get_total_levels():
+                        current_level += 1
+                        level_food_eaten = 0
+                        lvl_data = levels.get_level_data(current_level, BOARD_WIDTH, BOARD_HEIGHT)
+                        level_name = f"Level {current_level}/10: {lvl_data['name']}"
+                        req_food = lvl_data['required_food']
+                        obstacles = set(lvl_data['obstacles'])
+                        foods = [entities.spawn_food(snake.body, obstacles, BOARD_WIDTH, BOARD_HEIGHT)]
+                    else:
+                        # Completed all 10 levels!
+                        level_name = "Grand Master Achieved!"
+                        break
+
+                # Random Mode obstacle buildup
+                if mode == "random" and level_food_eaten % 3 == 0:
+                    new_obs = levels.generate_random_obstacles(len(obstacles) + 2, snake.body, BOARD_WIDTH, BOARD_HEIGHT)
+                    obstacles.update(new_obs)
+
+            # Speed adjustment as score rises
+            speed = max(0.06, 0.15 - (score * 0.0015))
+
+        # Update lifetimes of timed bonus/special foods
+        expired = []
+        for f in foods:
+            if f.lifetime > 0:
+                f.lifetime -= 1
+                if f.lifetime <= 0:
+                    expired.append(f)
+        for exp in expired:
+            foods.remove(exp)
+
+        hud_data = {
+            "score": score,
+            "best": max(best_score, score),
+            "mode_name": level_name,
+            "food_count": level_food_eaten,
+            "req_food": req_food
+        }
+        renderer.draw_game_board(snake, foods, obstacles, hud_data, BOARD_WIDTH, BOARD_HEIGHT, paused=False)
         time.sleep(speed)
-    
-    show_cursor()
-    clear_screen()
+
+    # Session over: record score and show end screen
+    storage.add_high_score(score)
+    renderer.clear_screen()
+    print(renderer.get_ascii_title())
+    print("\n" + f"{renderer.BOLD}{renderer.RED}=== GAME OVER ==={renderer.RESET}")
+    print(f"\nFinal Score: {renderer.BRIGHT_CYAN}{score}{renderer.RESET}")
+    print(f"Top High Score: {renderer.YELLOW}{max(best_score, score)}{renderer.RESET}\n")
+    print(f"{renderer.BRIGHT_BLUE}Press any key to return to menu...{renderer.RESET}")
+
+    time.sleep(0.5)
+    while get_key() is not None:
+        pass
+    while True:
+        if get_key():
+            break
+        time.sleep(0.05)
+
+
+def handle_settings_menu(settings: dict):
+    """Handle interactive snake color customization menu."""
+    colors = ["Green", "Cyan", "Magenta"]
+    current_color = settings.get("color", "Green")
+    selected_idx = colors.index(current_color) if current_color in colors else 0
+
+    while True:
+        # Build color options with ooO preview in appropriate color
+        options = []
+        for c in colors:
+            code = renderer.COLOR_MAP.get(c, renderer.BRIGHT_GREEN)
+            options.append(f"{code}ooO{renderer.RESET} {c}")
+
+        renderer.draw_menu(
+            options=options,
+            selected_idx=selected_idx,
+            header_text="Choose your snake colour:",
+            footer_text="Use Up/Down to choose, Enter to confirm."
+        )
+
+        while True:
+            k = get_key()
+            if k:
+                if isinstance(k, bytes):
+                    k = k.decode('ascii', errors='ignore').lower()
+                if k in ('w', 'up'):
+                    selected_idx = (selected_idx - 1) % len(colors)
+                    break
+                elif k in ('s', 'down'):
+                    selected_idx = (selected_idx + 1) % len(colors)
+                    break
+                elif k in ('\r', '\n', ' ', 'enter'):
+                    settings["color"] = colors[selected_idx]
+                    storage.save_settings(settings)
+                    return
+                elif k == 'q':
+                    return
+            time.sleep(0.05)
+
+
+def main():
+    """Application entry point: main navigation menu orchestrator."""
+    if sys.platform == 'win32':
+        os.system('')
+
+    sys.stdout.write(renderer.HIDE_CURSOR)
+    sys.stdout.flush()
+
+    settings = storage.load_settings()
+
+    try:
+        main_options = ["Play Game", "High Score", "Instructions", "Settings", "Exit"]
+        selected_idx = 0
+
+        while True:
+            leaderboard = storage.load_leaderboard()
+            best_score = leaderboard[0] if leaderboard else 0
+
+            renderer.draw_menu(
+                options=main_options,
+                selected_idx=selected_idx,
+                best_score=best_score,
+                footer_text="Use Up/Down (or W/S) to choose, Enter to select."
+            )
+
+            # Menu navigation loop
+            chosen_action = None
+            while True:
+                k = get_key()
+                if k:
+                    if isinstance(k, bytes):
+                        k = k.decode('ascii', errors='ignore').lower()
+                    if k in ('w', 'up'):
+                        selected_idx = (selected_idx - 1) % len(main_options)
+                        break
+                    elif k in ('s', 'down'):
+                        selected_idx = (selected_idx + 1) % len(main_options)
+                        break
+                    elif k in ('\r', '\n', ' ', 'enter'):
+                        chosen_action = main_options[selected_idx]
+                        break
+                    elif k == 'q':
+                        chosen_action = "Exit"
+                        break
+                time.sleep(0.05)
+
+            if chosen_action == "Play Game":
+                # Mode selection sub-menu
+                mode_options = ["Random Mode  (Endless)", "Classic Mode (10 Levels)", "Back to Main Menu"]
+                mode_idx = 0
+                while True:
+                    if mode_idx == 0:
+                        info = "Random Mode: obstacles build up endlessly as your score grows"
+                    elif mode_idx == 1:
+                        info = "Classic Mode: fight through 10 hand-built levels to become a grand master."
+                    else:
+                        info = ""
+
+                    renderer.draw_menu(
+                        options=mode_options,
+                        selected_idx=mode_idx,
+                        header_text="Choose your game mode:",
+                        footer_text="Use Up/Down (or W/S) to choose, Enter to select.",
+                        extra_info=info
+                    )
+
+                    mode_action = None
+                    while True:
+                        mk = get_key()
+                        if mk:
+                            if isinstance(mk, bytes):
+                                mk = mk.decode('ascii', errors='ignore').lower()
+                            if mk in ('w', 'up'):
+                                mode_idx = (mode_idx - 1) % len(mode_options)
+                                break
+                            elif mk in ('s', 'down'):
+                                mode_idx = (mode_idx + 1) % len(mode_options)
+                                break
+                            elif mk in ('\r', '\n', ' ', 'enter'):
+                                mode_action = mode_idx
+                                break
+                            elif mk == 'q':
+                                mode_action = 2
+                                break
+                        time.sleep(0.05)
+
+                    if mode_action == 0:
+                        run_game_session("random", settings)
+                        break
+                    elif mode_action == 1:
+                        run_game_session("classic", settings)
+                        break
+                    elif mode_action == 2:
+                        break
+
+            elif chosen_action == "High Score":
+                renderer.draw_leaderboard_screen(storage.load_leaderboard())
+                time.sleep(0.3)
+                while get_key() is not None:
+                    pass
+                while True:
+                    if get_key():
+                        break
+                    time.sleep(0.05)
+
+            elif chosen_action == "Instructions":
+                renderer.draw_instructions_screen()
+                time.sleep(0.3)
+                while get_key() is not None:
+                    pass
+                while True:
+                    if get_key():
+                        break
+                    time.sleep(0.05)
+
+            elif chosen_action == "Settings":
+                handle_settings_menu(settings)
+
+            elif chosen_action == "Exit":
+                break
+
+    finally:
+        sys.stdout.write(renderer.SHOW_CURSOR)
+        sys.stdout.flush()
+        renderer.clear_screen()
 
 
 if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        show_cursor()
-        clear_screen()
+        sys.stdout.write(renderer.SHOW_CURSOR)
+        sys.stdout.flush()
+        renderer.clear_screen()
         sys.exit(0)
